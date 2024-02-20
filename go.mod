@@ -5,4 +5,4 @@ require (
 	golang.org/x/text v0.3.2 // indirect
 )
 
-go 1.13
+go 1.21
