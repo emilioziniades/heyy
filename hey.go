@@ -37,34 +37,6 @@ const (
 	heyUA        = "hey/0.0.1"
 )
 
-var (
-	m           = flag.String("m", "GET", "")
-	headers     = flag.String("h", "", "")
-	body        = flag.String("d", "", "")
-	bodyFile    = flag.String("D", "", "")
-	accept      = flag.String("A", "", "")
-	contentType = flag.String("T", "text/html", "")
-	authHeader  = flag.String("a", "", "")
-	hostHeader  = flag.String("host", "", "")
-	userAgent   = flag.String("U", "", "")
-
-	output = flag.String("o", "", "")
-
-	c = flag.Int("c", 50, "")
-	n = flag.Int("n", 200, "")
-	q = flag.Float64("q", 0, "")
-	t = flag.Int("t", 20, "")
-	z = flag.Duration("z", 0, "")
-
-	h2   = flag.Bool("h2", false, "")
-	cpus = flag.Int("cpus", runtime.GOMAXPROCS(-1), "")
-
-	disableCompression = flag.Bool("disable-compression", false, "")
-	disableKeepAlives  = flag.Bool("disable-keepalive", false, "")
-	disableRedirects   = flag.Bool("disable-redirects", false, "")
-	proxyAddr          = flag.String("x", "", "")
-)
-
 var usage = `Usage: hey [options...] <url>
 
 Options:
@@ -102,24 +74,72 @@ Options:
                         (default for current machine is %d cores)
 `
 
+type options struct {
+	method             *string
+	headers            *headerSlice
+	body               *string
+	bodyFile           *string
+	accept             *string
+	contentType        *string
+	authHeader         *string
+	hostHeader         *string
+	userAgent          *string
+	output             *string
+	concurrentWorkers  *int
+	nRequests          *int
+	queriesPerSecond   *float64
+	timoutSeconds      *int
+	duration           *time.Duration
+	http2              *bool
+	cpus               *int
+	disableCompression *bool
+	disableKeepAlives  *bool
+	disableRedirects   *bool
+	proxyAddr          *string
+}
+
 func main() {
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, fmt.Sprintf(usage, runtime.NumCPU()))
 	}
 
-	var hs headerSlice
-	flag.Var(&hs, "H", "")
+	defaults := defaultOpts()
+
+	var opts = options{
+		method:             flag.String("m", *defaults.method, ""),
+		headers:            defaults.headers,
+		body:               flag.String("d", *defaults.body, ""),
+		bodyFile:           flag.String("D", *defaults.bodyFile, ""),
+		accept:             flag.String("A", *defaults.accept, ""),
+		contentType:        flag.String("T", *defaults.contentType, ""),
+		authHeader:         flag.String("a", *defaults.authHeader, ""),
+		hostHeader:         flag.String("host", *defaults.hostHeader, ""),
+		userAgent:          flag.String("U", *defaults.userAgent, ""),
+		concurrentWorkers:  flag.Int("c", *defaults.concurrentWorkers, ""),
+		nRequests:          flag.Int("n", *defaults.nRequests, ""),
+		queriesPerSecond:   flag.Float64("q", *defaults.queriesPerSecond, ""),
+		timoutSeconds:      flag.Int("t", *defaults.timoutSeconds, ""),
+		duration:           flag.Duration("z", *defaults.duration, ""),
+		http2:              flag.Bool("h2", *defaults.http2, ""),
+		cpus:               flag.Int("cpus", *defaults.cpus, ""),
+		disableCompression: flag.Bool("disable-compression", *defaults.disableCompression, ""),
+		disableKeepAlives:  flag.Bool("disable-keepalive", *defaults.disableKeepAlives, ""),
+		disableRedirects:   flag.Bool("disable-redirects", *defaults.disableRedirects, ""),
+		proxyAddr:          flag.String("x", *defaults.proxyAddr, ""),
+	}
+
+	flag.Var(opts.headers, "H", "")
 
 	flag.Parse()
 	if flag.NArg() < 1 {
 		usageAndExit("")
 	}
 
-	runtime.GOMAXPROCS(*cpus)
-	num := *n
-	conc := *c
-	q := *q
-	dur := *z
+	runtime.GOMAXPROCS(*opts.cpus)
+	num := *opts.nRequests
+	conc := *opts.concurrentWorkers
+	q := *opts.queriesPerSecond
+	dur := *opts.duration
 
 	if dur > 0 {
 		num = math.MaxInt32
@@ -137,17 +157,12 @@ func main() {
 	}
 
 	url := flag.Args()[0]
-	method := strings.ToUpper(*m)
 
 	// set content-type
 	header := make(http.Header)
-	header.Set("Content-Type", *contentType)
-	// set any other additional headers
-	if *headers != "" {
-		usageAndExit("Flag '-h' is deprecated, please use '-H' instead.")
-	}
+	header.Set("Content-Type", *opts.contentType)
 	// set any other additional repeatable headers
-	for _, h := range hs {
+	for _, h := range *opts.headers {
 		match, err := parseInputWithRegexp(h, headerRegexp)
 		if err != nil {
 			usageAndExit(err.Error())
@@ -155,14 +170,14 @@ func main() {
 		header.Set(match[1], match[2])
 	}
 
-	if *accept != "" {
-		header.Set("Accept", *accept)
+	if *opts.accept != "" {
+		header.Set("Accept", *opts.accept)
 	}
 
 	// set basic auth if set
 	var username, password string
-	if *authHeader != "" {
-		match, err := parseInputWithRegexp(*authHeader, authRegexp)
+	if *opts.authHeader != "" {
+		match, err := parseInputWithRegexp(*opts.authHeader, authRegexp)
 		if err != nil {
 			usageAndExit(err.Error())
 		}
@@ -170,11 +185,11 @@ func main() {
 	}
 
 	var bodyAll []byte
-	if *body != "" {
-		bodyAll = []byte(*body)
+	if *opts.body != "" {
+		bodyAll = []byte(*opts.body)
 	}
-	if *bodyFile != "" {
-		slurp, err := os.ReadFile(*bodyFile)
+	if *opts.bodyFile != "" {
+		slurp, err := os.ReadFile(*opts.bodyFile)
 		if err != nil {
 			errAndExit(err.Error())
 		}
@@ -182,15 +197,16 @@ func main() {
 	}
 
 	var proxyURL *gourl.URL
-	if *proxyAddr != "" {
+	if *opts.proxyAddr != "" {
 		var err error
-		proxyURL, err = gourl.Parse(*proxyAddr)
+		proxyURL, err = gourl.Parse(*opts.proxyAddr)
 		if err != nil {
 			usageAndExit(err.Error())
 		}
 	}
 
-	req, err := http.NewRequest(method, url, nil)
+	method := strings.ToUpper(*opts.method)
+	req, err := http.NewRequest(strings.ToUpper(method), url, nil)
 	if err != nil {
 		usageAndExit(err.Error())
 	}
@@ -200,8 +216,8 @@ func main() {
 	}
 
 	// set host header if set
-	if *hostHeader != "" {
-		req.Host = *hostHeader
+	if *opts.hostHeader != "" {
+		req.Host = *opts.hostHeader
 	}
 
 	ua := header.Get("User-Agent")
@@ -213,8 +229,8 @@ func main() {
 	header.Set("User-Agent", ua)
 
 	// set userAgent header if set
-	if *userAgent != "" {
-		ua = *userAgent + " " + heyUA
+	if *opts.userAgent != "" {
+		ua = *opts.userAgent + " " + heyUA
 		header.Set("User-Agent", ua)
 	}
 
@@ -226,13 +242,13 @@ func main() {
 		N:                  num,
 		C:                  conc,
 		QPS:                q,
-		Timeout:            *t,
-		DisableCompression: *disableCompression,
-		DisableKeepAlives:  *disableKeepAlives,
-		DisableRedirects:   *disableRedirects,
-		H2:                 *h2,
+		Timeout:            *opts.timoutSeconds,
+		DisableCompression: *opts.disableCompression,
+		DisableKeepAlives:  *opts.disableKeepAlives,
+		DisableRedirects:   *opts.disableRedirects,
+		H2:                 *opts.http2,
 		ProxyAddr:          proxyURL,
-		Output:             *output,
+		Output:             *opts.output,
 	}
 	w.Init()
 
@@ -249,6 +265,35 @@ func main() {
 		}()
 	}
 	w.Run()
+}
+
+func defaultOpts() options {
+	return options{
+		method:             ref("GET"),
+		headers:            new(headerSlice),
+		body:               ref(""),
+		bodyFile:           ref(""),
+		accept:             ref(""),
+		contentType:        ref("text/html"),
+		authHeader:         ref(""),
+		hostHeader:         ref(""),
+		userAgent:          ref(""),
+		concurrentWorkers:  ref(50),
+		nRequests:          ref(200),
+		queriesPerSecond:   ref(float64(0)),
+		timoutSeconds:      ref(20),
+		duration:           ref(time.Duration(0)),
+		http2:              ref(false),
+		cpus:               ref(runtime.GOMAXPROCS(-1)),
+		disableCompression: ref(false),
+		disableKeepAlives:  ref(false),
+		disableRedirects:   ref(false),
+		proxyAddr:          ref(""),
+	}
+}
+
+func ref[T any](t T) *T {
+	return &t
 }
 
 func errAndExit(msg string) {
